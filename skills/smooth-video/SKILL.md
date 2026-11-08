@@ -11,11 +11,13 @@ Tools: `scripts/` beside this file. They need Python with `opencv-python` + `num
 
 ## Steps
 
-1. **Measure.** Run `python scripts/check_smooth.py <clip>` on every clip involved, and on the film (`--ref` the original when there is one). Done when you know, for each part: its frame count vs the span it must fill, where its cuts are, and its frozen frames.
+1. **Measure.** Run `python scripts/check_smooth.py <clip>` on every clip involved, and on the film (`--ref` the original when there is one). It compares frames with brightness and contrast evened out, so a change of light (a film flickering on the set, a lamp, a grade shift) is listed under **light shifts**, not jumps: those are intended, not stutter. When it prints `VERDICT already smooth`, there is nothing to pace-match: say so and skip step 2 for that clip. Done when you know, for each part: its frame count vs the span it must fill, where its cuts are, and its frozen frames.
 2. **Pace-match each part.** Pick the branch:
    - **Replaces a part of a film** (the original part exists): cut that exact span out of the film (`ffmpeg -ss <start> -t <len>`, re-encoded so frames are exact), then `python scripts/pace_match.py --edit <ai_part> --ref <original_span> --out <part_paced>`. Shots and cuts are paired automatically; when cut counts differ, pass `--shots ref_from-ref_to:clip_from-clip_to,...`.
-   - **A clip with no reference** (joining raw AI clips, or a stuttering clip): `python scripts/pace_match.py --edit <clip> --out <clip_paced>` drops the freezes and respaces it evenly to its own length, or to `--frames N`.
+   - **A clip with no reference** (joining raw AI clips, or a stuttering clip): `python scripts/pace_match.py --edit <clip> --out <clip_paced>` drops the freezes and respaces it evenly to its own length, or to `--frames N`. A clip with no freezes is copied through unchanged (`--force` redraws it anyway). It cannot rebuild frames the AI skipped; a jump that remains needs `--ref` or RIFE/Topaz.
+   The sound comes along automatically (`--audio-from` picks another file, `--no-audio` drops it), padded or trimmed to the exact frame count; the script stops if the written frame count differs.
    Done when every paced part prints exactly the frame count of its span, shot by shot, with each cut on the same frame as the original.
+   - **Cut just before something happens** ("cut before the popcorn jumps"): `python scripts/find_moment.py <clip> --roi x,y,w,h --from <s> --to <s> --out sheet.jpg`. `--roi` is the area to watch, as fractions of the frame. It prints each frame's local change with the light evened out and the camera drift subtracted, ranks the likely events, and writes a contact sheet with each frame's time and number. Look at the sheet: the cut goes on the last frame before the thing starts moving, often a frame or two before the top-ranked one. Then `ffmpeg -i <clip> -frames:v <N> ... -af apad -t <N/fps>` (re-encoded; never `-shortest`). Check the event frame on every version separately: a 1080p finalize can start the event a frame or two earlier than its 480p draft.
 3. **Put it together.**
    - **Parts into a film:** `python scripts/splice_parts.py --film <film> --out <film_v2> --part <start_s>:<end_s>:<part_paced> ...`. It colour-matches each shot to the one it replaces, keeps the film's audio and every frame, and refuses a part whose frame count does not match.
    - **Clips into one video:** first make every clip the same size and fps, then join them with `ffmpeg -f concat` or the concat filter, re-encoding.
@@ -30,7 +32,9 @@ Tools: `scripts/` beside this file. They need Python with `opencv-python` + `num
 
 - **Seedance video edit changes the length.** A 3 s input came back 4.04 s (slowed down 1.35×); a 6 s input came back 5.7 s. Its outputs also had 1–3 freezes of their own. Send inputs of 4 s or more that start and end on cuts. Never trust the returned length: pace-match every time.
 - **Replace whole shots.** Swapping edited frames in mid-shot shows a jump where the original and the edit meet. Cut each part from cut to cut.
-- **An audio track shorter than the video** makes `ffmpeg -shortest` drop the last frames. `splice_parts.py` keeps every frame.
+- **An audio track shorter than the video** makes `ffmpeg -shortest` drop the last frames (a 95-frame cut came out 93). `splice_parts.py` and `pace_match.py` keep every frame; when remuxing by hand use `-af apad -t <frames/fps>` instead of `-shortest`.
+- **Light changes are not stutter.** A film-light flicker, a lamp or a grade shift used to read as 'jumps'. The checks now even out brightness first and list those as light shifts; judge only the remaining jumps.
+- **Higgsfield asset links** (`higgsfield.ai/asset/all/<id>`): the id is the generation job id; read its `result_url` with the Higgsfield connector's `jobs_wait` and download that.
 - **Colour:** match per shot and start fresh at each cut, so one shot's grade never bleeds into the next.
 
 ## Engines

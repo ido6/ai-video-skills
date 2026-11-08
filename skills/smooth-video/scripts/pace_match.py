@@ -5,6 +5,9 @@ like it (a fraction between two frames, from a parabola through the best match),
 forward, and draw the frame at that moment. The clip then moves exactly like the reference.
 Without a reference: drop the clip's frozen frames and respace what is left evenly over --frames frames.
 Works shot by shot (cuts found in both clips; or give --shots) so each cut lands on its exact frame.
+Frames are compared with brightness and contrast evened out, so a change of light is not mistaken for motion or a freeze.
+A clip with no reference and no frozen frames is copied through unchanged (--force redraws it anyway).
+The sound of --audio-from (default: --ref, else --edit) goes under the result, trimmed or padded to the exact frame count.
 
   python pace_match.py --edit ai.mp4 --ref original_part.mp4 --out paced.mp4
   python pace_match.py --edit ai.mp4 --frames 96 --out paced.mp4                 (no reference: 96 frames per shot)
@@ -27,8 +30,10 @@ def read(path):
 
 
 def small(f):
+    """Small blurred grey frame with brightness and contrast evened out, so a light change does not read as motion."""
     g = cv2.cvtColor(cv2.resize(f, (135, 240), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY).astype(np.float32)
-    return cv2.GaussianBlur(g, (0, 0), 1.0)
+    g = cv2.GaussianBlur(g, (0, 0), 1.0)
+    return (g - g.mean()) / (g.std() + 1e-3) * 40.0 + 128.0
 
 
 def changes(frames):
@@ -92,6 +97,26 @@ def between_rife(fa, fb, alpha, exe, model, gpu, work):
     return cv2.imread(po)
 
 
+def has_audio(path):
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0",
+                        path], capture_output=True, text=True)
+    return bool(r.stdout.strip())
+
+
+def frame_count(path):
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames", "-show_entries",
+                        "stream=nb_read_frames", "-of", "csv=p=0", path], capture_output=True, text=True)
+    return int(r.stdout.strip() or 0)
+
+
+def add_audio(video, source, out, frames, fps):
+    """Mux the source's sound under the new video. Padded with silence or trimmed to the video's exact length, never
+    with -shortest, which drops the last frames when the audio track ends early."""
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", video, "-i", source, "-map", "0:v", "-map", "1:a:0",
+                    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-af", "apad", "-t", f"{frames / fps:.6f}", out],
+                   check=True)
+
+
 def shot_pairs(ref, clip, spec):
     if spec:
         return [tuple(tuple(int(v) for v in part.split("-")) for part in s.split(":")) for s in spec.split(",")]
@@ -115,6 +140,9 @@ def main():
     ap.add_argument("--rife", help="path to rife-ncnn-vulkan.exe")
     ap.add_argument("--rife-model", default="rife-v4.6")
     ap.add_argument("--gpu", type=int, default=0, help="Vulkan GPU id for RIFE (rife-ncnn-vulkan -v lists them)")
+    ap.add_argument("--audio-from", help="file whose sound goes under the result (default: --ref, else --edit)")
+    ap.add_argument("--no-audio", action="store_true", help="write the video without sound")
+    ap.add_argument("--force", action="store_true", help="redraw even a clip that has nothing to fix")
     a = ap.parse_args()
 
     clip = read(a.edit)
@@ -139,6 +167,12 @@ def main():
         cb = [0] + cuts(clip) + [len(clip)]
         pairs = [(None, c) for c in zip(cb, cb[1:])]
     targets = [int(v) for v in a.frames.split(",") if v]
+    if ref is None and not targets and not a.force and all(
+            len(unfrozen(clip[c0:c1], a.freeze)) == c1 - c0 for _, (c0, c1) in pairs):
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", a.edit, "-map", "0", "-c", "copy", a.out], check=True)
+        print(f"already smooth: no frozen frames to drop, copied {a.edit} unchanged (pass --force to redraw)")
+        print("RESULT", a.out, frame_count(a.out), "frames")
+        return
     out = []
     for n, (r, (c0, c1)) in enumerate(pairs):
         shot = clip[c0:c1]
@@ -156,14 +190,22 @@ def main():
         print(f"shot {n + 1}: clip frames {c1 - c0} (dropped {len(shot) - len(kept)} frozen) -> {len(t)} frames; "
               f"clip frames per output frame {np.median(steps):.2f} (min {steps.min():.2f}, max {steps.max():.2f})")
     h, w = out[0].shape[:2]
+    source = a.audio_from or a.ref or a.edit
+    sound = not a.no_audio and has_audio(source)
+    target = os.path.join(work, "video.mp4") if sound else a.out
     p = subprocess.Popen(["ffmpeg", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w}x{h}",
-                          "-r", f"{fps:g}", "-i", "-", "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", a.out],
+                          "-r", f"{fps:g}", "-i", "-", "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", target],
                          stdin=subprocess.PIPE)
     for f in out:
         p.stdin.write(f.tobytes())
     p.stdin.close()
     p.wait()
-    print("RESULT", a.out, len(out), "frames")
+    if sound:
+        add_audio(target, source, a.out, len(out), fps)
+    got = frame_count(a.out)
+    if got != len(out):
+        raise SystemExit(f"frame count mismatch: wrote {len(out)}, file has {got}")
+    print("RESULT", a.out, got, "frames", f"(sound from {source})" if sound else "(no sound)")
 
 
 if __name__ == "__main__":

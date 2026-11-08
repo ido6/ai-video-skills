@@ -8,7 +8,7 @@ Claude Code / Claude.ai skills for planning and prompting AI video (Seedance 2.5
 | `skills/cinematography` | Shot language, lighting, lenses. `references/camera-directing-playbook.md` covers 9:16 composition, handheld with tension, lens/FOV tables, camera packages, packshots. Based on [fal-ai-community/skills](https://github.com/fal-ai-community/skills) (see `INSTALL-SOURCE.md`). |
 | `skills/blender-blockout-pawns` | Builds pawn-style Blender blockouts and exports them as motion/structure references for AI video. Replace `<BLENDER_EXE>` and `<BLOCKOUTS_DIR>` with your paths. |
 | `skills/seedance-25` | Seedance 2.5 multishot omni-reference prompts. |
-| `skills/smooth-video` | Makes joined AI video play smoothly: pace-matches an AI edit (Seedance video edit, Kling, Luma) back onto the part it replaces, removes frozen/skipped frames, splices with colour match, and verifies against the original. Needs Python with `opencv-python` + `numpy`, and `ffmpeg`. |
+| `skills/smooth-video` | Makes joined AI video play smoothly: pace-matches an AI edit (Seedance video edit, Kling, Luma) back onto the part it replaces, removes frozen/skipped frames, splices with colour match, and verifies against the original. Light changes are reported separately from stutter, sound is kept frame-exact, and `find_moment.py` finds the frame to cut on before an event. Needs Python with `opencv-python` + `numpy`, and `ffmpeg`. |
 
 ## Install
 
